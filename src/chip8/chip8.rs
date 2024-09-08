@@ -1,5 +1,6 @@
 extern crate sdl2;
 
+use std::{fs, io};
 use std::time::{Duration, Instant};
 
 use sdl2::pixels::Color;
@@ -20,6 +21,7 @@ const SCREEN_HEIGHT: u32 = 32;
 // Chip8
 pub struct Chip8Config {
     display_scale: u32,
+    program: String,
 }
 
 impl Chip8Config {
@@ -27,6 +29,7 @@ impl Chip8Config {
     pub fn new() -> Self {
         Chip8Config {
             display_scale: 10,
+            program: "roms/ibm-logo.ch8".to_string(),
         }
     }
 
@@ -53,6 +56,7 @@ pub struct Chip8 {
     delay_timer: u8,  // is used to decrement at a rate of 60 hz 
     sound_timer: u8, // an 8 bit sound timer which functions like the delay timer, but which also
                      // gives off a beeping sound as long as its not 0
+    program: String,
     sdl_context: Sdl,
     canvas: Canvas<Window>,
     audio_device: AudioDevice<SquareWave>,
@@ -76,6 +80,7 @@ impl Chip8 {
         // Create chip 8 instance
         let mut chip8 = Chip8 {
             memory: [0; 4096],
+            program: config.program,
             stack: [0; 32],  // stack for 16-bit addresses which is used to call subroutines/functions
             display: [false; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize], // 64x32 pixels - monochrome -- super chip is 128*64
             display_scale: config.display_scale,
@@ -93,6 +98,7 @@ impl Chip8 {
         };
 
         chip8.set_fonts();
+        chip8.load_program().unwrap();
 
         // TODO: Display
 
@@ -120,6 +126,9 @@ impl Chip8 {
             if last_update.elapsed() >= std::time::Duration::from_millis(16) {
                 self.update_timers(); // This may need to be seperate from the fetch/decode/execute cycle
                 self.draw();
+                // fetch, decode, execute
+                let opcode = self.fetch_opcode();
+                self.decode_and_execute(opcode);
                 last_update = Instant::now();
             }
 
@@ -127,6 +136,175 @@ impl Chip8 {
             // delay to reduce cpu usage
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    /*
+     * Read the instruction that PC is currently pointing at from memory. An
+     * instruction is two bytes, so you will need to read two successive bytes
+     * from memory and combine them into one 16-bit instruction.
+     */
+    fn fetch_opcode(&mut self) -> u16 {
+        // let opcode = (self.memory[self.pc as usize] as u16) << 8 
+        //     | self.memory[self.pc as usize + 1] as u16;
+        // let pc = self.pc as usize;
+        // let byte1 = self.memory[pc] as u16;
+        // let byte2 = self.memory[pc + 1] as u16;
+
+
+        let pc = self.pc as usize;
+
+        let byte1 = self.memory[pc] as u16;
+        let byte2  = self.memory[pc + 1] as u16;
+
+        self.pc += 2;
+
+        byte1 << 8 | byte2
+    }
+
+    fn decode_and_execute(&mut self, opcode: u16) {
+        
+        // Mask off (with a “binary AND”) the first number in the instruction,
+        // and have one case per number. Some of these cases will need separate
+        // switch statements inside them to further decode the instruction.
+
+        // Although every instruction will have a first nibble that tells you
+        // what kind of instruction it is, the rest of the nibbles will have
+        // different meanings. To differentiate these meanings, we usually call
+        // them different things, but all of them can be any hexadecimal number
+        // from 0 to F:
+        
+        let nibbles = (
+            // F: First nibble tells you what kind of instruction it is.
+            // (opcode & 0xF000) >> 12 as u8,
+            0xF000 as u16,
+            // X:  The second nibble. Used to look up one of the 16 registers
+            // (VX) from V0 through VF.
+            // (opcode & 0x0F00) >> 8 as u8,
+            0x0F00 as u16,
+            // Y: The third nibble. Also used to look up one of the 16 registers
+            // (VY) from V0 through VF.
+            // (opcode & 0x00F0) >> 4 as u8,
+            0x00F0 as u16,
+            // N: The fourth nibble. A 4-bit number.
+            // (opcode & 0x000F) as u8,
+            0x000F as u16,
+        );
+
+        // NN: The second byte (third and fourth nibbles). An 8-bit immediate
+        // number.
+        // let nn = (opcode & 0x00FF) as u8;
+        let nn = 0x00FF as u16;
+        
+        // NNN: The second, third and fourth nibbles. A 12-bit immediate memory
+        // address.
+        // let nnn = opcode & 0x0FFF as u16;
+        let nnn = 0x0FFF as u16;
+
+        match opcode & 0xF000 {
+            0x0000 => match opcode & nn {
+                0x00E0 => self.clear_screen(),
+                _ => info!("Unknown opcode: 0x{:04X}", opcode),
+            }
+            0x1000 => self.jump(opcode),
+            0x6000 => self.set(opcode),
+            0x7000 => self.add(opcode),
+            0xA000 => self.set_index_register(opcode),
+            0xD000 => draw_sprite(opcode),
+            _ => info!("Unknown opcode: 0x{:04X}", opcode),
+        }
+        
+        
+    }
+
+    // 0xDXYN
+    //
+    // This will draw an N pixels tall sprite from the memory location that the
+    // I index register is holding to the screen, at the horizontal X coordinate
+    // in VX and the Y coordinate in VY. All the pixels that are “on” in the
+    // sprite will flip the pixels on the screen that it is drawn to (from left
+    // to right, from most to least significant bit). If any pixels on the
+    // screen were turned “off” by this, the VF flag register is set to 1.
+    // Otherwise, it’s set to 0.
+    fn draw_sprite(&mut self, opcode: u16) {
+        let  x_index = ((opcode & 0x0F00) >> 8) as usize;
+        let  y_index = ((opcode & 0x00F0) >> 4) as usize;
+
+        // Set the X coordinate to the value in VX modulo 64 (or, equivalently, VX &
+        // 63, where & is the binary AND operation)
+        // & 63 is the same as % 64
+        let x = self.v[x_index] % 64;
+
+        // Set the Y coordinate to the value in VY modulo 32 (or VY & 31)
+        let y = self.v[y_index] % 62;
+
+        // Set VF to 0
+        self.v[0xF] = 0;
+
+        // For N rows:
+        // Increment Y (VY is not incremented)
+        // Stop if you reach the bottom edge of the screen
+
+        // for N rows
+        for row in 0..(opcode & 0x000F) as usize {
+            // Get the Nth byte of sprite data, counting from the memory address
+            // in the I register (I is not incremented)
+            let sprite_byte = self.memory[(self.i + row as u16) as usize];
+
+            // For each of the 8 pixels/bits in this sprite row (from left to
+            // right, ie. from most to least significant bit):
+            for col in 0..8 {
+
+            // Get the pixel value (0 or 1) at this position in the sprite row
+            let sprite_pixel = (sprite_byte >> (7 - col)) & 0x1;
+
+            // If the current pixel in the sprite row is on and the pixel at
+            // coordinates X,Y on the screen is also on, turn off the pixel and
+            // set VF to 1
+            
+            //  Or if the current pixel in the sprite row is on and the screen pixel is not, draw the pixel at the X and Y coordinates
+
+            //  If you reach the right edge of the screen, stop drawing this row
+
+            //  Increment X (VX is not incremented)
+
+            }
+
+        }
+
+    }
+
+    fn set_index_register(&mut self, opcode: u16) {
+        self.i = opcode & 0x0FFF;
+    }
+    
+    // add the value nn to vx
+    // Note that on most other systems, and even in some of the other CHIP-8
+    // instructions, this would set the carry flag if the result overflowed 8
+    // bits; in other words, if the result of the addition is over 255.  For
+    // this instruction, this is not the case. If V0 contains FF and you execute
+    // 7001, the CHIP-8’s flag register VF is not affected.
+    fn add(&mut self, opcode: u16) {
+        let register = (opcode & 0x0F00) >> 8;
+        let value = opcode & 0x00FF;
+        self.v[register as usize] += value as u8;
+    }
+
+    // set register VX to the value of NN
+    fn set(&mut self, opcode: u16) {
+        let register = (opcode & 0x0F00) >> 8;
+        let value = opcode & 0x00FF;
+        self.v[register as usize] = value as u8;
+    }
+
+    // This instruction should simply set PC to NNN, causing the program to jump 
+    // to that memory location. Do not increment the pc aftwords, it jumps directly there
+    fn jump(&mut self, opcode: u16) {
+        self.pc = opcode & 0x0FFF;
+    }
+
+    // Clear the display
+    fn clear_screen(&mut self) {
+        self.display.fill(false);
     }
 
     // Initialize sdl2 with result sdl and canvas
@@ -168,6 +346,20 @@ impl Chip8 {
         }).unwrap();
 
         (sdl_context, canvas, audio_device)
+    }
+
+    fn load_program(&mut self) -> Result<(), io::Error> {
+        // read in binary file into a byte vector
+        let program = fs::read(&self.program)?;
+
+        if 0x200 + program.len() > self.memory.len() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "Program is too large to fin in memory"));
+        }
+
+        self.memory[0x200..(0x200 + program.len())]
+            .copy_from_slice(&program);
+
+        Ok(())
     }
 
     fn draw(&mut self) {
