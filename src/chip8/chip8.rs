@@ -209,7 +209,7 @@ impl Chip8 {
             0x6000 => self.set(opcode),
             0x7000 => self.add(opcode),
             0xA000 => self.set_index_register(opcode),
-            0xD000 => draw_sprite(opcode),
+            0xD000 => self.draw_sprite(opcode),
             _ => info!("Unknown opcode: 0x{:04X}", opcode),
         }
         
@@ -232,40 +232,67 @@ impl Chip8 {
         // Set the X coordinate to the value in VX modulo 64 (or, equivalently, VX &
         // 63, where & is the binary AND operation)
         // & 63 is the same as % 64
-        let x = self.v[x_index] % 64;
+        let x = (self.v[x_index] % 64) as u32;
 
         // Set the Y coordinate to the value in VY modulo 32 (or VY & 31)
-        let y = self.v[y_index] % 62;
+        let y = (self.v[y_index] % 32) as u32;
 
         // Set VF to 0
         self.v[0xF] = 0;
 
-        // For N rows:
-        // Increment Y (VY is not incremented)
-        // Stop if you reach the bottom edge of the screen
+        let height = (opcode & 0x000F) as usize;
 
-        // for N rows
-        for row in 0..(opcode & 0x000F) as usize {
+        // dxyn 
+        // for N rows (how tall)
+        for row in 0..height {
+
             // Get the Nth byte of sprite data, counting from the memory address
             // in the I register (I is not incremented)
             let sprite_byte = self.memory[(self.i + row as u16) as usize];
+
+            // stop if Y + row exceeds the screen height (don't wrap vertically)
+            if y + row as u32 >= SCREEN_HEIGHT {
+                break;
+            }
 
             // For each of the 8 pixels/bits in this sprite row (from left to
             // right, ie. from most to least significant bit):
             for col in 0..8 {
 
-            // Get the pixel value (0 or 1) at this position in the sprite row
-            let sprite_pixel = (sprite_byte >> (7 - col)) & 0x1;
+                // Get the pixel value (0 or 1) at this position in the sprite row
+                let sprite_pixel = (sprite_byte >> (7 - col)) & 0x1;
 
-            // If the current pixel in the sprite row is on and the pixel at
-            // coordinates X,Y on the screen is also on, turn off the pixel and
-            // set VF to 1
+                // Stop if X + col exceeds the screen width (don't wrap horizontally)
+                if x + col >= SCREEN_WIDTH {
+                    break;
+                }
+
+                // Calculate the screen coordinates
+                let screen_x = (x + col) % SCREEN_WIDTH;
+                let screen_y = (y + row as u32) % SCREEN_HEIGHT;
+
+                // Get the index of the pixel in the display array
+                let pixel_index = (screen_y as u32 * SCREEN_WIDTH + screen_x as u32) as usize;
+
+                // If the current pixel in the sprite row is on and the pixel at
+                // coordinates X,Y on the screen is also on, turn off the pixel and
+                // set VF to 1
             
-            //  Or if the current pixel in the sprite row is on and the screen pixel is not, draw the pixel at the X and Y coordinates
+                // if the current pixel in the sprite row is on...
+                if sprite_pixel == 1 {
+                    // if the pixel at the X and Y coordinates is also on...
+                    // turn off the pixel and set VF to 1
+                    if self.display[pixel_index] {
+                        self.display[pixel_index] = false;
+                        self.v[0xF] = 1;
+                    } else {
 
-            //  If you reach the right edge of the screen, stop drawing this row
+                    //  if the current pixel in the sprite row is on and the screen
+                    //  pixel is not, draw the pixel at the X and Y coordinates
+                        self.display[pixel_index] = true;
+                    }
 
-            //  Increment X (VX is not incremented)
+                } 
 
             }
 
