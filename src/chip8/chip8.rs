@@ -11,12 +11,15 @@ use sdl2::audio::AudioDevice;
 use sdl2::audio::{AudioCallback, AudioSpecDesired};
 use sdl2::Sdl;
 
+use rand::Rng;
+
 use log::{info, debug};
 // use log::{info, warn, error, debug, trace};
 // use log::info;
 
 const SCREEN_WIDTH: u32 = 64;
 const SCREEN_HEIGHT: u32 = 32;
+const SET_VX_FROM_VY_IN_SHIFT: bool = false;
 
 // Chip8
 pub struct Chip8Config {
@@ -46,7 +49,7 @@ pub struct Chip8 {
     display: [bool; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize], // 64x32 pixels - monochrome 
     display_scale: u32,
     pc: u16,  // program counter which points at the current instruction in memory
-    stack: [u16; 32],  // stack for 16-bit addresses which is used to call subroutines/functions
+    stack: Stack,  // stack for 16-bit addresses which is used to call subroutines/functions
                          // and return from them
     i: u16,  // index register which is used to point at locations in memory
     v: [u8; 16],  // general purpose registers numbered 0 through F hexadecimal, ie. 0 through 15
@@ -81,7 +84,7 @@ impl Chip8 {
         let mut chip8 = Chip8 {
             memory: [0; 4096],
             program: config.program,
-            stack: [0; 32],  // stack for 16-bit addresses which is used to call subroutines/functions
+            stack: Stack::new(),  // stack for 16-bit addresses which is used to call subroutines/functions
             display: [false; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize], // 64x32 pixels - monochrome -- super chip is 128*64
             display_scale: config.display_scale,
             pc: 0x200, // The first CHIP-8 interpreter (on the COSMAC VIP computer) was also
@@ -203,17 +206,237 @@ impl Chip8 {
         match opcode & 0xF000 {
             0x0000 => match opcode & nn {
                 0x00E0 => self.clear_screen(),
+                0x00EE => self.return_from_subroutine(),
                 _ => info!("Unknown opcode: 0x{:04X}", opcode),
             }
             0x1000 => self.jump(opcode),
+            0x2000 => self.subroutine(opcode),
+            0x3000 => self.skip_if_nn_is_equal(opcode),
+            0x4000 => self.skip_if_nn_is_not_equal(opcode),
+            0x5000 => self.skip_if_vx_and_vy_are_equal(opcode),
             0x6000 => self.set(opcode),
             0x7000 => self.add(opcode),
+            0x8000 => match opcode & 0x000F {
+                0x0000 => self.set_vx_from_vy(opcode),
+                0x0001 => self.vx_binary_or_vy(opcode),
+                0x0002 => self.vx_binary_and_vy(opcode),
+                0x0003 => self.vx_binary_xor_vy(opcode),
+                0x0004 => self.vx_add_vy(opcode),
+                0x0005 => self.vx_subtract_vy(opcode),
+                0x0006 => self.vx_shift_right(opcode, SET_VX_FROM_VY_IN_SHIFT),
+                0x0007 => self.vx_subtract_from_vy(opcode),
+                0x000E => self.vx_shift_left(opcode, SET_VX_FROM_VY_IN_SHIFT),
+                _ => info!("Unknown opcode: 0x{:04X}", opcode),
+            },
+            0x9000 => self.skip_if_vx_and_vy_are_not_equal(opcode),
             0xA000 => self.set_index_register(opcode),
+            0xB000 => self.jump_with_offset(opcode),
+            0xC000 => self.random(opcode),
             0xD000 => self.draw_sprite(opcode),
             _ => info!("Unknown opcode: 0x{:04X}", opcode),
         }
         
         
+    }
+
+    // CXNN
+    // Generate a random number from 0 to NN, and then BINARY AND it with NN
+    // then put the value in VX.
+    fn random(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let nn = (opcode & 0x00FF) as u8;
+
+        let mut rng = rand::thread_rng();
+        let random_number: u8 = rng.gen_range(0..nn);
+        self.v[x] = random_number & nn;
+    }
+    
+    // 0xBNNN
+    // In the original COSMAC VIP interpreter, this instruction jumped to the
+    // address NNN plus the value in the register V0. This was mainly used for
+    // “jump tables”, to quickly be able to jump to different subroutines based
+    // on some input.
+    // 
+    // Starting with CHIP-48 and SUPER-CHIP, it was (probably unintentionally)
+    // changed to work as BXNN: It will jump to the address XNN, plus the value
+    // in the register VX. So the instruction B220 will jump to address 220 plus
+    // the value in the register V2.
+    //    
+    // The BNNN instruction was not widely used, so you might be able to just
+    // implement the first behavior (if you pick one, that’s definitely the one
+    // to go with). If you want to support a wide range of CHIP-8 programs, make
+    // this “quirk” configurable.
+    // 
+    // This just implements the original COSMAC VIP behavior
+    fn jump_with_offset(&mut self, opcode: u16) {
+        let address = opcode & 0x0FFF;
+        self.pc = self.v[0] as u16 + address;
+    }
+
+    // 8XYE
+    // See 8xy6 for more information
+    // shift left instead of right
+    fn vx_shift_left(&mut self, opcode: u16, set_vx: bool) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let y = ((opcode & 0x00F0) >> 4) as usize;
+        if set_vx {
+            self.v[x] = self.v[y];
+        }
+        self.v[0x000F] = self.v[x] >> 7;
+        self.v[x] <<= 1;
+    }
+
+    // 8XY6
+    // In the CHIP-8 interpreter for the original COSMAC VIP, this instruction
+    // did the following: It put the value of VY into VX, and then shifted the
+    // value in VX 1 bit to the right (8XY6) or left (8XYE). VY was not
+    // affected, but the flag register VF would be set to the bit that was
+    // shifted out.
+    //    
+    // However, starting with CHIP-48 and SUPER-CHIP in the early 1990s, these
+    // instructions were changed so that they shifted VX in place, and ignored
+    // the Y completely.
+    fn vx_shift_right(&mut self, opcode: u16, set_vx: bool) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let y = ((opcode & 0x00F0) >> 4) as usize;
+        if set_vx {
+            self.v[x] = self.v[y];
+        }
+        self.v[0x000F] = self.v[x] & 0x0001;
+        self.v[x] >>= 1;
+    }
+    
+    // 8XY7
+    // VX is set to VY - VX.
+    // TODO: Not sure what to do if they are same size, currently 
+    // setting it as so
+    // If VX is greater than or equal VY, VF is set to 1, otherwise 0.
+    fn vx_subtract_from_vy(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let y = ((opcode & 0x00F0) >> 4) as usize;
+        self.v[0xF] = if self.v[y] >= self.v[x] { 1 } else { 0 };
+        self.v[x] = self.v[y].wrapping_sub(self.v[x]);
+    }
+
+    // 8XY5
+    // VX is set to VX - VY. 
+    // TODO: Not sure what to do if they are same size, currently 
+    // setting it as so
+    // If VX is greater than or equal VY, VF is set to 1, otherwise 0.
+    fn vx_subtract_vy(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let y = ((opcode & 0x00F0) >> 4) as usize;
+        self.v[0xF] = if self.v[x] >= self.v[y] { 1 } else { 0 };
+        // wrapping sub is a function on u8
+        self.v[x] = self.v[x].wrapping_sub(self.v[y]);
+    }
+
+    // 8XY4
+    // VX is set to VX + VY. VF is set to 1 if there is a carry, 0 if not.
+    // VY is not affected
+    // Unlike 7XNN, this addition will affect the carry flag, so if VX + VY is
+    // greater than 255, VF will be set to 1. If it’s less than or equal to 255,
+    // VF will be set to 0.
+    fn vx_add_vy(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let y = ((opcode & 0x00F0) >> 4) as usize;
+        let sum = self.v[x] as u16 + self.v[y] as u16;
+        self.v[x] = sum as u8;
+        self.v[0xF] = if sum > 255 { 1 } else { 0 };
+    }
+
+    // 8XY3
+    // VX is set to the bitwise/binary logical XOR of VX and VY.
+    // VY is not affected
+    fn vx_binary_xor_vy(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let y = ((opcode & 0x00F0) >> 4) as usize;
+        self.v[x] ^= self.v[y];
+    }
+
+    // 8XY2 
+    // VX is set to the bitwise/binary logical AND of VX and VY.
+    // VY is not affected
+    fn vx_binary_and_vy(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let y = ((opcode & 0x00F0) >> 4) as usize;
+        self.v[x] &= self.v[y];
+    }
+
+    // 8XY1
+    // VX is set to the bitwise/binary logical OR of VX and VY.
+    // VY is not affected
+    fn vx_binary_or_vy(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let y = ((opcode & 0x00F0) >> 4) as usize;
+        self.v[x] |= self.v[y];
+    }
+
+    // 8XY0
+    // VX is set to the value of VY.
+    fn set_vx_from_vy(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let y = ((opcode & 0x00F0) >> 4) as usize;
+        self.v[x] = self.v[y];
+    }
+
+    // 9XY0
+    // 9XY0 skips if the values in VX and VY are not equal
+    fn skip_if_vx_and_vy_are_not_equal(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let y = ((opcode & 0x00F0) >> 4) as usize;
+        if self.v[x] != self.v[y] {
+            self.pc += 2;
+        }
+    }
+
+    // 5XY0
+    // 5XY0 skips if the values in VX and VY are equal
+    fn skip_if_vx_and_vy_are_equal(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let y = ((opcode & 0x00F0) >> 4) as usize;
+        if self.v[x] == self.v[y] {
+            self.pc += 2;
+        }
+    }
+
+    // 4XNN
+    // 4XNN will skip one instruction if the value in VX is NOT equal to NN
+    fn skip_if_nn_is_not_equal(&mut self, opcode: u16) {
+        let register = (opcode & 0x0F00) >> 8;
+        let value = opcode & 0x00FF;
+        if self.v[register as usize] != value as u8 {
+            self.pc += 2;
+        }
+    }
+    
+    // 3XNN
+    // 3XNN will skip one instruction if the value in VX is equal to NN
+    fn skip_if_nn_is_equal(&mut self, opcode: u16) {
+        let register = (opcode & 0x0F00) >> 8;
+        let value = opcode & 0x00FF;
+        if self.v[register as usize] == value as u8 {
+            self.pc += 2;
+        }
+    }
+
+    // subroutine
+    // 2NNN calls the subroutine at memory location NNN. In other words, just
+    // like 1NNN, you should set PC to NNN. However, the difference between a
+    // jump and a call is that this instruction should first push the current PC
+    // to the stack, so the subroutine can return later.
+    fn subroutine(&mut self, opcode: u16) {
+        let address = opcode & 0x0FFF;
+        self.stack.push(self.pc).unwrap();
+        self.pc = address;
+    }
+
+    // return_from_subroutine
+    // Returning from a subroutine is done with 00EE, and it does this by
+    // removing (“popping”) the last address from the stack and setting the PC
+    // to it.
+    fn return_from_subroutine(&mut self) {
+        self.pc = self.stack.pop().unwrap();
     }
 
     // 0xDXYN
@@ -442,7 +665,7 @@ impl Chip8 {
         info!("  sound_timer: 0x{:02X}", self.sound_timer);
         info!("  display_scale: {}", self.display_scale);
         debug!("  display: {:?}", self.display);
-        debug!("  stack: {:?}", self.stack);
+        debug!("  stack: {:?}", self.stack.stack);
         info!("  v: {:?}", self.v);
         debug!("  memory: {:?}", self.memory);
         info!("Chip8 info end");
@@ -493,6 +716,37 @@ impl Chip8 {
         self.audio_device.pause();
     }
 
+}
+
+struct Stack {
+    stack: [u16; 32],
+    i: usize, // index to track top of stack
+}
+
+impl Stack {
+    fn new() -> Self {
+        Stack {
+            stack: [0; 32],
+            i: 0,
+        }
+    }
+
+    fn push(&mut self, value: u16) -> Result<(), &str> {
+        if self.i >= self.stack.len() {
+            return Err("Stack overflow");
+        }
+        self.stack[self.i] = value;
+        self.i += 1;
+        Ok(())
+    }
+
+    fn pop(&mut self) -> Result<u16, &str> {
+        if self.i == 0 {
+            return Err("Stack underflow");
+        }
+        self.i -= 1;
+        Ok(self.stack[self.i])
+    }
 }
 
 struct SquareWave {
