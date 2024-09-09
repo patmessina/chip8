@@ -1,7 +1,11 @@
 extern crate sdl2;
 
+use std::collections::HashMap;
 use std::{fs, io};
 use std::time::{Duration, Instant};
+
+use sdl2::event::Event;
+use sdl2::keyboard::Keycode;
 
 use sdl2::pixels::Color;
 use sdl2::rect::Rect;
@@ -19,12 +23,14 @@ use log::{info, debug};
 
 const SCREEN_WIDTH: u32 = 64;
 const SCREEN_HEIGHT: u32 = 32;
+const KEY_COUNT: usize = 16;
+
 const SET_VX_FROM_VY_IN_SHIFT: bool = false;
 
 // Chip8
 pub struct Chip8Config {
-    display_scale: u32,
-    program: String,
+    pub display_scale: u32,
+    pub program: String,
 }
 
 impl Chip8Config {
@@ -32,7 +38,8 @@ impl Chip8Config {
     pub fn new() -> Self {
         Chip8Config {
             display_scale: 10,
-            program: "roms/ibm-logo.ch8".to_string(),
+            // program: "roms/ibm-logo.ch8".to_string(),
+            program: "roms/test_opcode.ch8".to_string(),
         }
     }
 
@@ -47,6 +54,8 @@ impl Chip8Config {
 pub struct Chip8 {
     memory: [u8; 4096],  // chip-8 has direct access to up to 4Kib of Ram
     display: [bool; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize], // 64x32 pixels - monochrome 
+    keys: Keys,  // 16 keys, 0-F
+    key_map: HashMap<Keycode, usize>,
     display_scale: u32,
     pc: u16,  // program counter which points at the current instruction in memory
     stack: Stack,  // stack for 16-bit addresses which is used to call subroutines/functions
@@ -78,12 +87,15 @@ impl Chip8 {
         config.log();
 
         // initialize sdl2
-        let (sdl_context, canvas, audio_device) = Chip8::init_sdl();
+        // TODO: this is maybe a bit much to be returning... Maybe a return type?
+        let (sdl_context, canvas, audio_device, key_map) = Chip8::init_sdl();
 
         // Create chip 8 instance
         let mut chip8 = Chip8 {
             memory: [0; 4096],
             program: config.program,
+            keys: Keys::new(),
+            key_map,
             stack: Stack::new(),  // stack for 16-bit addresses which is used to call subroutines/functions
             display: [false; (SCREEN_WIDTH * SCREEN_HEIGHT) as usize], // 64x32 pixels - monochrome -- super chip is 128*64
             display_scale: config.display_scale,
@@ -119,7 +131,17 @@ impl Chip8 {
             // Handle events for keyboard, window, etc.
             for event in event_pump.poll_iter() {
                 match event {
-                    sdl2::event::Event::Quit {..} => return,
+                    Event::Quit {..} => return,
+                    Event::KeyDown { keycode: Some(keycode), .. } => {
+                        if let Some(&key) = self.key_map.get(&keycode) {
+                            self.keys.set_key(key, true);
+                        }
+                    },
+                    Event::KeyUp { keycode: Some(keycode), .. } => {
+                        if let Some(&key) = self.key_map.get(&keycode) {
+                            self.keys.set_key(key, false);
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -129,15 +151,15 @@ impl Chip8 {
             if last_update.elapsed() >= std::time::Duration::from_millis(16) {
                 self.update_timers(); // This may need to be seperate from the fetch/decode/execute cycle
                 self.draw();
-                // fetch, decode, execute
-                let opcode = self.fetch_opcode();
-                self.decode_and_execute(opcode);
                 last_update = Instant::now();
             }
+            // fetch, decode, execute
+            let opcode = self.fetch_opcode();
+            self.decode_and_execute(opcode);
 
 
             // delay to reduce cpu usage
-            std::thread::sleep(Duration::from_millis(1));
+            std::thread::sleep(Duration::from_micros(500));
         }
     }
 
@@ -176,22 +198,20 @@ impl Chip8 {
         // them different things, but all of them can be any hexadecimal number
         // from 0 to F:
         
-        let nibbles = (
-            // F: First nibble tells you what kind of instruction it is.
-            // (opcode & 0xF000) >> 12 as u8,
-            0xF000 as u16,
-            // X:  The second nibble. Used to look up one of the 16 registers
-            // (VX) from V0 through VF.
-            // (opcode & 0x0F00) >> 8 as u8,
-            0x0F00 as u16,
+        // F: First nibble tells you what kind of instruction it is.
+        // (opcode & 0xF000) >> 12 as u8,
+
+        // X:  The second nibble. Used to look up one of the 16 registers
+        // (VX) from V0 through VF.
+        // (opcode & 0x0F00) >> 8 as u8,
+
             // Y: The third nibble. Also used to look up one of the 16 registers
             // (VY) from V0 through VF.
             // (opcode & 0x00F0) >> 4 as u8,
-            0x00F0 as u16,
+
+
             // N: The fourth nibble. A 4-bit number.
             // (opcode & 0x000F) as u8,
-            0x000F as u16,
-        );
 
         // NN: The second byte (third and fourth nibbles). An 8-bit immediate
         // number.
@@ -233,12 +253,159 @@ impl Chip8 {
             0xB000 => self.jump_with_offset(opcode),
             0xC000 => self.random(opcode),
             0xD000 => self.draw_sprite(opcode),
+            0xE000 => match opcode & 0x00FF {
+                0x009E => self.skip_if_key_is_pressed(opcode),
+                0x00A1 => self.skip_if_key_is_not_pressed(opcode),
+                _ => info!("Unknown opcode: 0x{:04X}", opcode),
+            },
+            0xF000 => match opcode & 0x00FF {
+                0x0007 => self.set_vx_to_delay_timer(opcode),
+                0x000A => self.wait_for_keypress(opcode),
+                0x0015 => self.set_delay_timer(opcode),
+                0x0018 => self.set_sound_timer(opcode),
+                0x001E => self.add_vx_to_index_register(opcode),
+                0x0029 => self.set_index_to_font(opcode),
+                0x0033 => self.store_bcd(opcode),
+                0x0055 => self.store_registers(opcode),
+                0x0065 => self.load_registers(opcode),
+                _ => info!("Unknown opcode: 0x{:04X}", opcode),
+            },
             _ => info!("Unknown opcode: 0x{:04X}", opcode),
         }
         
         
     }
 
+    // FX55
+    // For FX55, the value of each variable register from V0 to VX inclusive (if
+    // X is 0, then only V0) will be stored in successive memory addresses,
+    // starting with the one that’s stored in I. V0 will be stored at the
+    // address in I, V1 will be stored in I + 1, and so on, until VX is stored
+    // in I + X.
+    fn store_registers(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        for i in 0..=x {
+            self.memory[self.i as usize + i] = self.v[i];
+        }
+    }
+
+    fn load_registers(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        for i in 0..=x {
+            self.v[i] = self.memory[self.i as usize + i];
+        }
+    }
+    
+    // FX33
+    // Binary-coded decimal (BCD) representation of VX, with the most significant
+    //
+    // This instruction is a little involved. It takes the number in VX (which
+    // is one byte, so it can be any number from 0 to 255) and converts it to
+    // three decimal digits, storing these digits in memory at the address in
+    // the index register I. For example, if VX contains 156 (or 9C in
+    // hexadecimal), it would put the number 1 at the address in I, 5 in address
+    // I + 1, and 6 in address I + 2.
+    fn store_bcd(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let value = self.v[x];
+        let hundreds = value / 100;
+        let tens = (value % 100) / 10;
+        let ones = value % 10;
+        self.memory[self.i as usize] = hundreds;
+        self.memory[self.i as usize + 1] = tens;
+        self.memory[self.i as usize + 2] = ones;
+    }
+    
+    // FX29
+    // Set I to the memory address of the hexadecimal character in VX.
+    fn set_index_to_font(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let char_value = self.v[x] as u16;
+        
+        // Set I register to the memory address of the hexadecimal character in VX
+        // We started the font at 0x50 in memory
+        // Each character is 5 bytes long (look at each row)
+        self.i = 0x50 + (char_value * 5);
+    }
+
+    // FX0A
+    // This instruction “blocks”; it stops executing instructions and waits for
+    // key input (or loops forever, unless a key is pressed).
+    // That is we need to decrement the program counter by 2 so that the
+    // instruction is executed again.
+    fn wait_for_keypress(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let mut key_pressed = false;
+        for i in 0..KEY_COUNT {
+            if self.keys.is_key_pressed(i) {
+                self.v[x] = i as u8;
+                key_pressed = true;
+            }
+        }
+        if !key_pressed {
+            self.pc -= 2;
+        }
+    }
+    
+    
+    // FX1E
+    // The index register I will get the value in VX added to it
+    // Unlike other arithmetic instructions, this did not affect VF on overflow
+    // on the original COSMAC VIP. However, it seems that some interpreters set
+    // VF to 1 if I “overflows” from 0FFF to above 1000 (outside the normal
+    // addressing range). This wasn’t the case on the original COSMAC VIP, at
+    // least, but apparently the CHIP-8 interpreter for Amiga behaved this way.
+    // At least one known game, Spacefight 2091!, relies on this behavior. I
+    // don’t know of any games that rely on this not happening, so perhaps it’s
+    // safe to do it like the Amiga interpreter did.
+    fn add_vx_to_index_register(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        let sum = self.i + self.v[x] as u16;
+        self.v[0xF] = if sum > 0xFFF { 1 } else { 0 };
+        self.i = sum & 0xFFF;
+    }
+
+    // FX07
+    // set vx to the current value of the delay timer
+    fn set_vx_to_delay_timer(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        self.v[x] = self.delay_timer;
+    }
+
+    // FX15
+    // Set the delay timer to the value in VX
+    fn set_delay_timer(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        self.delay_timer = self.v[x];
+    }
+
+    // FX18 
+    // sets the sound timer to the value in VX
+    fn set_sound_timer(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        self.sound_timer = self.v[x];
+    }
+
+    // EX9E
+    // EX9E will skip one instruction if the key stored in VX is pressed.
+    // (increment pc by 2)
+    fn skip_if_key_is_pressed(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        if self.keys.is_key_pressed(self.v[x] as usize) {
+            self.pc += 2;
+        }
+    }
+
+    // EXA1
+    // EXA1 will skip one instruction if the key stored in VX is not pressed.
+    // (increment pc by 2)
+    fn skip_if_key_is_not_pressed(&mut self, opcode: u16) {
+        let x = ((opcode & 0x0F00) >> 8) as usize;
+        if !self.keys.is_key_pressed(self.v[x] as usize) {
+            self.pc += 2;
+        }
+    }
+    
     // CXNN
     // Generate a random number from 0 to NN, and then BINARY AND it with NN
     // then put the value in VX.
@@ -536,7 +703,8 @@ impl Chip8 {
     fn add(&mut self, opcode: u16) {
         let register = (opcode & 0x0F00) >> 8;
         let value = opcode & 0x00FF;
-        self.v[register as usize] += value as u8;
+        // self.v[register as usize] += value as u8;
+        self.v[register as usize] = self.v[register as usize].wrapping_add(value as u8);
     }
 
     // set register VX to the value of NN
@@ -558,7 +726,7 @@ impl Chip8 {
     }
 
     // Initialize sdl2 with result sdl and canvas
-    fn init_sdl() -> (Sdl, Canvas<Window>, AudioDevice<SquareWave>) {
+    fn init_sdl() -> (Sdl, Canvas<Window>, AudioDevice<SquareWave>, HashMap<Keycode, usize>) {
         let sdl_context = sdl2::init().unwrap();
         let video_subsystem = sdl_context.video().unwrap();
 
@@ -595,7 +763,25 @@ impl Chip8 {
                 }
         }).unwrap();
 
-        (sdl_context, canvas, audio_device)
+        let mut key_map: HashMap<Keycode, usize> = HashMap::new();
+        key_map.insert(Keycode::Num1, 0x1);
+        key_map.insert(Keycode::Num2, 0x2);
+        key_map.insert(Keycode::Num3, 0x3);
+        key_map.insert(Keycode::Num4, 0xC);
+        key_map.insert(Keycode::Q, 0x4);
+        key_map.insert(Keycode::W, 0x5);
+        key_map.insert(Keycode::E, 0x6);
+        key_map.insert(Keycode::R, 0xD);
+        key_map.insert(Keycode::A, 0x7);
+        key_map.insert(Keycode::S, 0x8);
+        key_map.insert(Keycode::D, 0x9);
+        key_map.insert(Keycode::F, 0xE);
+        key_map.insert(Keycode::Z, 0xA);
+        key_map.insert(Keycode::X, 0x0);
+        key_map.insert(Keycode::C, 0xB);
+        key_map.insert(Keycode::V, 0xF);
+
+        (sdl_context, canvas, audio_device, key_map)
     }
 
     fn load_program(&mut self) -> Result<(), io::Error> {
@@ -646,9 +832,7 @@ impl Chip8 {
         }
 
         if self.sound_timer > 0 {
-            if self.sound_timer == 1 {
-                self.play_sound(); // TODO: this should be using an event bus
-            }
+            self.play_sound(); // TODO: this should be using an event bus
             self.sound_timer -= 1;
         } 
         if self.sound_timer == 0 {
@@ -747,6 +931,34 @@ impl Stack {
         self.i -= 1;
         Ok(self.stack[self.i])
     }
+}
+
+struct Keys {
+    state: [bool; KEY_COUNT],
+}
+
+impl Keys {
+
+    fn new() -> Self {
+        Keys {
+            state: [false; KEY_COUNT],
+        }
+    }
+
+    fn set_key(&mut self, key: usize, pressed: bool) {
+        if (key as usize) < KEY_COUNT {
+            self.state[key] = pressed;
+        }
+    }
+
+    fn is_key_pressed(&self, key: usize) -> bool {
+        if (key as usize) < KEY_COUNT {
+            self.state[key]
+        } else {
+            false
+        }
+    }
+
 }
 
 struct SquareWave {
