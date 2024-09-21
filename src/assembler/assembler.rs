@@ -64,6 +64,10 @@ impl Chip8Assembler {
 
         self.parse()?;
 
+        for err in &self.errors {
+            println!("{}", err);
+        }
+
         Ok(())
     }
 
@@ -188,26 +192,37 @@ impl Chip8Assembler {
         Ok(())
     }
 
+    // Given a &str, find the address from label or value
+    fn get_address(&self, arg: &str) -> Result<u16, io::Error>  {
+        let address = match self.labels.get(arg) {
+            Some(address) => *address,
+            None => {
+                let arg = arg.strip_prefix("0x").unwrap_or(arg);
+                    match u16::from_str_radix(arg, 16) {
+                        Ok(address) => address,
+                        Err(e) => {
+                            return Err(io::Error::new(io::ErrorKind::InvalidData,
+                            format!("Invalid address {}", arg)))
+                        }
+                    }
+            }
+        };
+
+        return Ok(address)
+    }
+
     fn jmp(&mut self, line: i32, args: &Vec<String>) {
         match args.len() {
             // 1 argument is jump to an address (NNN)
             1 => {
                 let arg = args[0].as_str();
                 // check if arg is a label. If it is, replace with address
-                let address = match self.labels.get(arg) {
-                    Some(address) => *address,
-                    None => {
-
-                        let arg = arg.strip_prefix("0x").unwrap_or(arg);
-                        match u16::from_str_radix(arg, 16) {
-                            Ok(address) => address,
-                            Err(e) => {
-                                self.errors.push(
-                                    format!("Invalid address: {} on line {}",
-                                    arg, line));
-                                return;
-                            }
-                        }
+                let address = match self.get_address(arg) {
+                    Ok(address) => address,
+                    Err(err) => {
+                        self.errors.push(
+                            format!("Error on line {}: {}", line, err));
+                        return
                     }
                 };
 
@@ -236,24 +251,14 @@ impl Chip8Assembler {
                     return;
                 }
 
-                let address = match self.labels.get(address_arg) {
-                    Some(address) => *address,
-                    None => {
-                        let address_arg = address_arg.strip_prefix("0x").unwrap_or(address_arg);
-                        match u16::from_str_radix(address_arg, 16) {
-                            Ok(address) => address,
-                            Err(e) => {
-                                self.errors.push(
-                                    format!("Invalid address: {} on line {}",
-                                    address_arg, line));
-                                return;
-                            }
-                        }
+                let address = match self.get_address(address_arg) {
+                    Ok(address) => address,
+                    Err(err) => {
+                        self.errors.push(
+                            format!("Error on line {}: {}", line, err));
+                        return
                     }
                 };
-
-                debug!("I am opcode {}", (0xB000 | address));
-                
                 self.opcodes.push(0xB000 | address);
             }
             _ => {
