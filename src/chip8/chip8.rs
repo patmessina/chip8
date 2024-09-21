@@ -160,6 +160,7 @@ impl Chip8 {
 
             // delay to reduce cpu usage
             std::thread::sleep(Duration::from_micros(500));
+            // std::thread::sleep(Duration::from_millis(1));
         }
     }
 
@@ -221,7 +222,7 @@ impl Chip8 {
         // NNN: The second, third and fourth nibbles. A 12-bit immediate memory
         // address.
         // let nnn = opcode & 0x0FFF as u16;
-        let nnn = 0x0FFF as u16;
+        // let nnn = 0x0FFF as u16;
 
         match opcode & 0xF000 {
             0x0000 => match opcode & nn {
