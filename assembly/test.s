@@ -3,6 +3,5 @@
 org 200
 
 start:
-    jmp start
-    jmp 0x1
-    jmp v0 0x22
+    rnd vf 0x556
+    rnd v2 0xM5

@@ -178,6 +178,9 @@ impl Chip8Assembler {
                         "jmp" => {
                             self.jmp(token.line, &instruction.args);
                         },
+                        "ret" => self.opcodes.push(0x00EE),
+                        "rnd" => self.rnd(token.line, &instruction.args),
+                        "sub" => self.sub(token.line, &instruction.args),
                         _ => {
                             self.errors.push(format!("Unknown instruction: {} on line {}", 
                                 instruction.name, token.line));
@@ -190,6 +193,40 @@ impl Chip8Assembler {
         debug!("Opcodes: {:?}", self.opcodes.iter().map(|x| format!("{:X}", x)).collect::<Vec<String>>());
 
         Ok(())
+    }
+
+    fn rnd(&mut self, line: i32, args: &Vec<String>) {
+        if args.len() != 2 {
+            self.errors.push(
+                format!("Error on line {}: Invalid number of arguments for rnd", line));
+            return
+        }
+
+        let register = match self.registers.get(args[0].as_str()) {
+            Some(register) => register,
+            None => {
+                self.errors.push(
+                    format!("Error on line {}: Invalid register {}", line, args[0]));
+                return
+            }
+        };
+
+        let num = args[1].strip_prefix("0x").unwrap_or(args[1].as_str());
+        let num = match u8::from_str_radix(num, 16) {
+            Ok(num) => num,
+            Err(e) => {
+                self.errors.push(
+                    format!("Error on line {}: Invalid number {}", line, args[1]));
+                return
+            }
+        };
+
+
+        // let op: u16 = 0xC000;
+        let register = register << 8;
+        self.opcodes.push(0xC000 | register | num as u16);
+
+
     }
 
     // Given a &str, find the address from label or value
@@ -209,6 +246,31 @@ impl Chip8Assembler {
         };
 
         return Ok(address)
+    }
+
+    fn sub(&mut self, line: i32, args: &Vec<String>) {
+        match args.len() {
+            1 => {
+                let arg = args[0].as_str();
+                // get address from label or string
+                let address = match self.get_address(arg) {
+                    Ok(address) => address,
+                    Err(err) => {
+                        self.errors.push(
+                            format!("Error on line {}: {}", line, err));
+                        return
+                    }
+                };
+
+                self.opcodes.push(0x2000 | address);
+
+            }
+            _ => {
+                self.errors.push(
+                    format!("Error on line {}: Invalid number of arguments for sub instruction", 
+                        line));
+            }
+        }
     }
 
     fn jmp(&mut self, line: i32, args: &Vec<String>) {
