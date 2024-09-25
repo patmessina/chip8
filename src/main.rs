@@ -22,8 +22,11 @@ fn main() {
                 target_path = args[3].clone();
             }
             println!("Assembling program {} to {}", source_path, target_path);
-            let mut ass = assembler::Chip8Assembler::new(source_path, target_path);
-            ass.assemble().unwrap()
+            assembler::assemble(source_path).unwrap();
+
+
+            // let mut ass = assembler::Chip8Assembler::new(source_path, target_path);
+            // ass.assemble().unwrap()
         },
         "emulate" => {
             println!("Emulating program: {}", args[2]);
