@@ -1,5 +1,6 @@
 #[derive(PartialEq, Debug)]
-#[repr(u16)]
+#[derive(Clone,Copy)]
+#[repr(u8)]
 pub enum Register {
     V0 = 0x0,
     V1 = 0x1,

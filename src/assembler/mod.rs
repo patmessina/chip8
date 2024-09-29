@@ -5,6 +5,7 @@ pub mod utils;
 pub mod labels;
 pub mod opcodes;
 pub mod registers;
+pub mod arg;
 
 pub use assembler::assemble;
 pub use token::{Token, TokenType};
@@ -14,3 +15,4 @@ pub use utils::get_address;
 pub use labels::get_labels;
 pub use opcodes::*;
 pub use registers::Register;
+pub use arg::ArgType;

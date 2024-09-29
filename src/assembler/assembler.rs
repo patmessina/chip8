@@ -38,11 +38,26 @@ pub fn assemble(source: String) -> Result<(), String> {
            TokenType::Instruction => {
 
                let opcode_result = match token.name.to_lowercase().as_str() {
+                   "add" => opcodes::add(&token.args),
+                   "and" => opcodes::and(&token.args),
                    "call" => opcodes::call(&labels, &token.args),
                    "cls" => Ok(0x00E0),
+                   "drw" => opcodes::drw(&token.args),
                    "jmp" => opcodes::jmp(&labels, &token.args),
+                   "ld" => opcodes::ld(&token.args),
+                   "or" => opcodes::or(&token.args),
                    "ret" => Ok(0x00EE),
                    "rnd" => opcodes::rnd(&token.args),
+                   "se" => opcodes::se(&token.args),
+                   "shl" => opcodes::shl(&token.args),
+                   "shr" => opcodes::shr(&token.args),
+                   "sknp" => opcodes::sknp(&token.args),
+                   "skp" => opcodes::skp(&token.args),
+                   "sne" => opcodes::sne(&token.args),
+                   "sub" => opcodes::sub(&token.args),
+                   "subn" => opcodes::subn(&token.args),
+                   "wkp" => opcodes::wkp(&token.args),
+                   "xor" => opcodes::xor(&token.args),
                    _ => Err(format!("Unknown instruction {}", token.name)),
                };
 

@@ -290,6 +290,8 @@ impl Chip8 {
         }
     }
 
+    // FX65 does the opposite; it takes the value stored at the memory addresses and loads them
+    // into the variable registers instead.
     fn load_registers(&mut self, opcode: u16) {
         let x = ((opcode & 0x0F00) >> 8) as usize;
         for i in 0..=x {
@@ -695,6 +697,7 @@ impl Chip8 {
         self.i = opcode & 0x0FFF;
     }
     
+    // 7XNN
     // add the value nn to vx
     // Note that on most other systems, and even in some of the other CHIP-8
     // instructions, this would set the carry flag if the result overflowed 8
