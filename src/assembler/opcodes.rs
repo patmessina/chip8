@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::utils::{get_address, address_from_string};
+use super::utils::get_address;
 use super::registers::Register;
 use super::arg::ArgType;
 
@@ -309,17 +309,30 @@ pub fn rnd(args: &Vec<String>) -> Result<u16, String> {
                 args.len()))
     }
 
-    let register = Register::get_register(args[0].as_str())?;
+    let first_arg = ArgType::new(args[0].as_str())?;
+    let second_arg = ArgType::new(args[1].as_str())?;
 
-    // TODO: Test that this is not larger than 0xFF
-    let address = address_from_string(args[1].as_str())?;
-    if address > 0xFF {
+    let reg_x = match first_arg {
+        ArgType::Register(reg) => reg,
+        _ => {
+            return Err("Invalid first argument for rnd: expected register".into())
+        }
+    };
+
+    let num = match second_arg {
+        ArgType::Number(num) => num,
+        _ => {
+            return Err("Invalid second argument for rnd: expected number".into())
+        }
+    };
+
+    if num > 0xFF {
         return Err("Invalid address for rnd: expected 0xFF or less".into())
     }
 
     // let register = register.to_u16() << 8;
-    let register = (register as u16) << 8;
-    let opcode = 0xC000 | register | address;
+    let register = (reg_x as u16) << 8;
+    let opcode = 0xC000 | register | num;
 
     Ok(opcode)
 }
@@ -392,35 +405,45 @@ pub fn sknp(args: &Vec<String>) -> Result<u16, String> {
     Ok(opcode)
 }
 
+// se
+// skip if equal
 pub fn se(args: &Vec<String>) -> Result<u16, String> {
 
-    let opcode: u16;
-    
     if args.len() != 2 {
         return Err(
             format!("Invalid number of arguments for se: expected 2, got {}",
                 args.len()))
     }
 
-    let reg_x = Register::get_register(args[0].as_str())?;
+    let first_arg = ArgType::new(args[0].as_str())?;
+    let second_arg = ArgType::new(args[1].as_str())?;
 
-    match Register::get_register(args[1].as_str()) {
-        Ok(reg) => {
+    let reg_x = match first_arg {
+        ArgType::Register(reg) => reg,
+        _ => {
+            return Err("Invalid first argument for se: expected register".into())
+        }
+    };
+
+    let opcode = match second_arg {
+        ArgType::Register(reg) => {
             //5XY0
             //skip if vx and vy are equal
-            opcode = 0x5000 | (reg_x as u16) << 8 | (reg as u16) << 4;
-        }
-        Err(_) => {
-            // 3XNN
+            0x5000 | (reg_x as u16) << 8 | (reg as u16) << 4
+        },
+        ArgType::Number(num) => {
+            // 3xnn
             // skip if nn is equal to vx
-            let address = address_from_string(args[1].as_str())?;
-            if address > 0xFF {
+            if num > 0xFF {
                 return Err(
                     "Invalid address for se: expected 0xFF or less".into())
-            }
-            opcode = 0x3000 | (reg_x as u16) | address;
+            }   
+            0x3000 | (reg_x as u16) << 8 | num
+        },
+        _ => {
+            return Err("Invalid second argument for se".into())
         }
-    }
+    };
 
     Ok(opcode)
 }
@@ -468,8 +491,8 @@ pub fn shr(args: &Vec<String>) -> Result<u16, String> {
 }
 
 
+// skip if not equal
 pub fn sne(args: &Vec<String>) -> Result<u16, String> {
-    let opcode: u16;
 
     if args.len() != 2 {
         return Err(
@@ -477,25 +500,35 @@ pub fn sne(args: &Vec<String>) -> Result<u16, String> {
                 args.len()))
     }
 
-    let reg_x = Register::get_register(args[0].as_str())?;
+    let first_arg = ArgType::new(args[0].as_str())?;
+    let second_arg = ArgType::new(args[1].as_str())?;
 
-    match Register::get_register(args[1].as_str()) {
-        Ok(reg) => {
+    let reg_x = match first_arg {
+        ArgType::Register(reg) => reg,
+        _ => {
+            return Err("Invalid first argument for sne: expected register".into())
+        }
+    };
+
+    let opcode = match second_arg {
+        ArgType::Register(reg) => {
             //9XY0
             //skip if vx and vy are not equal
-            opcode = 0x9000 | (reg_x as u16) << 8 | (reg as u16) << 4;
-        }
-        Err(_) => {
+            0x9000 | (reg_x as u16) << 8 | (reg as u16) << 4
+        },
+        ArgType::Number(num) => {
             // 4XNN
             // skip if nn is not equal to vx
-            let address = address_from_string(args[1].as_str())?;
-            if address > 0xFF {
+            if num > 0xFF {
                 return Err(
                     "Invalid address for sne: expected 0xFF or less".into())
             }
-            opcode = 0x4000 | (reg_x as u16) | address;
+            0x4000 | (reg_x as u16) << 8 | num
+        },
+        _ => {
+            return Err("Invalid second argument for sne".into())
         }
-    }
+    };
 
     Ok(opcode)
 }

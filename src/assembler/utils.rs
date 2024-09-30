@@ -16,6 +16,11 @@ pub fn address_from_string(s: &str) -> Result<u16, String> {
             format!("Error parsing address {}: address out of range", s))
     }
 
+    if address % 2 != 0 {
+        return Err(
+            format!("Error parsing address {}: address must be even", s))
+    }
+
     Ok(address)
 }
 
@@ -103,7 +108,7 @@ mod tests {
             },
             TestCase {
                 address: "201",
-                expected: Ok(0x201),
+                expected: Err("Error parsing address 201: address must be even".into()),
             },
             TestCase {
                 address: "0xFFFF",
