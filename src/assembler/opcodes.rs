@@ -384,6 +384,12 @@ pub fn or(args: &Vec<String>) -> Result<u16, String> {
 pub fn skp(args: &Vec<String>) -> Result<u16, String> {
     let opcode: u16;
 
+    if args.len() != 1 {
+        return Err(
+            format!("Invalid number of arguments for skp: expected 1, got {}",
+                args.len()))
+    }
+
     let reg_x = Register::get_register(args[0].as_str())?;
 
     opcode = 0xE09E | (reg_x as u16) << 8;
@@ -398,6 +404,12 @@ pub fn skp(args: &Vec<String>) -> Result<u16, String> {
 // skip if key is not pressed from vx
 pub fn sknp(args: &Vec<String>) -> Result<u16, String> {
     let opcode: u16;
+
+    if args.len() != 1 {
+        return Err(
+            format!("Invalid number of arguments for sknp: expected 1, got {}",
+                args.len()))
+    }
 
     let reg_x = Register::get_register(args[0].as_str())?;
 
@@ -452,18 +464,23 @@ pub fn se(args: &Vec<String>) -> Result<u16, String> {
 // 
 // 8xye
 pub fn shl(args: &Vec<String>) -> Result<u16, String> {
-    let opcode: u16;
-
-    if args.len() != 2 {
-        return Err(
-            format!("Invalid number of arguments for shl: expected 2, got {}",
-                args.len()))
-    }
 
     let reg_x = Register::get_register(args[0].as_str())?;
-    let reg_y = Register::get_register(args[1].as_str())?;
 
-    opcode = 0x800E | (reg_x as u16) << 8 | (reg_y as u16) << 4;
+    let opcode = match args.len() {
+        2 => {
+            let reg_y = Register::get_register(args[1].as_str())?;
+            0x800E | (reg_x as u16) << 8 | (reg_y as u16) << 4
+        },
+        1 => {
+            0x800E | (reg_x as u16) << 8
+        },
+        _ => {
+            return Err(
+                format!("Invalid number of arguments for shl: expected 2, got {}",
+                    args.len()))
+        }
+    };
 
     Ok(opcode)
 
@@ -473,18 +490,23 @@ pub fn shl(args: &Vec<String>) -> Result<u16, String> {
 //
 // 8xy6
 pub fn shr(args: &Vec<String>) -> Result<u16, String> {
-    let opcode: u16;
-
-    if args.len() != 2 {
-        return Err(
-            format!("Invalid number of arguments for shr: expected 2, got {}",
-                args.len()))
-    }
 
     let reg_x = Register::get_register(args[0].as_str())?;
-    let reg_y = Register::get_register(args[1].as_str())?;
 
-    opcode = 0x8006 | (reg_x as u16) << 8 | (reg_y as u16) << 4;
+    let opcode = match args.len() {
+        2 => {
+            let reg_y = Register::get_register(args[1].as_str())?;
+            0x8006 | (reg_x as u16) << 8 | (reg_y as u16) << 4
+        },
+        1 => {
+            0x8006 | (reg_x as u16) << 8
+        },
+        _ => {
+            return Err(
+                format!("Invalid number of arguments for shr: expected 2, got {}",
+                    args.len()))
+        }
+    };
 
     Ok(opcode)
 
@@ -1015,14 +1037,14 @@ mod tests {
                 expected: Ok(0x801E),
             },
             TestCase {
+                name: "Valid registers - v2",
+                args: vec!["v2".to_string()],
+                expected: Ok(0x820E),
+            },
+            TestCase {
                 name: "Valid registers - va and vf",
                 args: vec!["va".to_string(), "vf".to_string()],
                 expected: Ok(0x8AFE),
-            },
-            TestCase {
-                name: "Invalid number of arguments",
-                args: vec!["v0".to_string()],
-                expected: Err("Invalid number of arguments for shl: expected 2, got 1".into()),
             },
         ];
 
@@ -1047,14 +1069,14 @@ mod tests {
                 expected: Ok(0x8016),
             },
             TestCase {
+                name: "Valid registers - v2",
+                args: vec!["v2".to_string()],
+                expected: Ok(0x8206),
+            },
+            TestCase {
                 name: "Valid registers - va and vf",
                 args: vec!["va".to_string(), "vf".to_string()],
                 expected: Ok(0x8AF6),
-            },
-            TestCase {
-                name: "Invalid number of arguments",
-                args: vec!["v0".to_string()],
-                expected: Err("Invalid number of arguments for shr: expected 2, got 1".into()),
             },
         ];
 
