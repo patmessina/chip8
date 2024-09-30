@@ -1,13 +1,13 @@
-use log::debug;
+use log::{debug, info};
 
-use std::{fs::File, io::{self, BufRead}};
+use std::{fs::File, io::{self, BufRead, Write}};
 
 use super::token::{Token, TokenType};
 use super::origin::get_origin;
 use super::labels::get_labels;
 use super::opcodes;
 
-pub fn assemble(source: String) -> Result<(), String> {
+pub fn assemble(source: String, target: String) -> Result<(), String> {
 
 
     let tokens = parse_file(source)?;
@@ -20,7 +20,7 @@ pub fn assemble(source: String) -> Result<(), String> {
     debug!("Origin: 0x{:X}", origin);
 
 
-    let mut opcodes = new_opcodes(origin);
+    let mut opcodes = new_opcodes(origin)?;
     debug!("Opcodes: {:?}",
         opcodes.iter().map(|x| format!("{:X}", x)).collect::<Vec<String>>());
 
@@ -78,20 +78,40 @@ pub fn assemble(source: String) -> Result<(), String> {
     debug!("Opcodes: {:?}",
         opcodes.iter().map(|x| format!("{:X}", x)).collect::<Vec<String>>());
 
-   if errors.len() > 0 {
-       return Err(errors.join("\n"))
-   }
+    if errors.len() > 0 {
+        return Err(errors.join("\n"))
+    }
+
+    info!("Writing to file: {}", target);
+    save(target, opcodes)?;
+
+    Ok(())
+}
+
+fn save(target: String, opcodes: Vec<u16>) -> Result<(), String> {
+    let mut file = match File::create(target) {
+        Ok(file) => file,
+        Err(e) => return Err(format!("Error creating file: {}", e)),
+    };
+
+    for opcode in opcodes {
+        match file.write_all(&opcode.to_be_bytes()) {
+            Ok(_) => {},
+            Err(e) => return Err(format!("Error writing to file: {}", e)),
+        }
+    }
 
     Ok(())
 }
 
 // new_opcodes creates a vector of u16 opcodes with a length of origin
-fn new_opcodes(origin: u16) -> Vec<u16> {
-    let mut opcodes: Vec<u16> = Vec::new();
-    for _ in 0..origin {
-        opcodes.push(0);
+fn new_opcodes(origin: u16) -> Result<Vec<u16>, String> {
+    if origin % 2 != 0 {
+        return Err("Origin must be even".to_string())
     }
-    opcodes
+    let num_opcodes = origin / 2;
+    let opcodes = vec![0; num_opcodes as usize];
+    Ok(opcodes)
 }
 
 // Read file into tokens
@@ -180,23 +200,27 @@ mod tests {
     fn test_new_opcodes() {
         struct TestCase {
             origin: u16,
-            expected: Vec<u16>,
+            expected: Result<Vec<u16>, String>,
         }
 
         let test_cases = [
             TestCase {
                 origin: 0x200,
-                expected: vec![0; 0x200 as usize],
+                // 0x200 / 2 = 0x100 -- 2 bytes per opcode
+                expected: Ok(vec![0; 0x100 as usize]),
             },
             TestCase {
-                origin: 0x1,
-                expected: vec![0; 0x1 as usize],
+                origin: 0x2,
+                expected: Ok(vec![0; 0x1 as usize]),
+            },
+            TestCase {
+                origin: 0x201,
+                expected: Err("Origin must be even".to_string()),
             },
         ];
 
         for case in test_cases.iter() {
-            let result = new_opcodes(case.origin);
-            assert_eq!(result, case.expected, "Failed on origin: 0x{:X}", case.origin);
+            assert_eq!(new_opcodes(case.origin), case.expected);
         }
 
     }

@@ -22,7 +22,15 @@ fn main() {
                 target_path = args[3].clone();
             }
             println!("Assembling program {} to {}", source_path, target_path);
-            assembler::assemble(source_path).unwrap();
+            match assembler::assemble(source_path, target_path) {
+                Ok(_) => {
+                    println!("Assembled successfully");
+                },
+                Err(e) => {
+                    eprintln!("{}", e);
+                    std::process::exit(1);
+                }
+            }
 
 
             // let mut ass = assembler::Chip8Assembler::new(source_path, target_path);
