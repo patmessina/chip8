@@ -1,11 +1,12 @@
 use super::token::{Token, TokenType};
 use std::collections::HashMap;
 
-pub fn get_labels(tokens: &Vec<Token>, origin: u16) -> Result<HashMap<String, u16>, String> {
+pub fn get_labels(tokens: &Vec<Token>, _origin: u16) -> Result<HashMap<String, u16>, String> {
 
     let mut labels: HashMap<String, u16> = HashMap::new();
 
-    let mut pc = origin;
+    // let mut pc = origin;
+    let mut pc = 0x200;
     let mut errors: Vec<String> = Vec::new();
 
     for token in tokens {

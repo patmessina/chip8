@@ -115,6 +115,11 @@ impl Chip8 {
         chip8.set_fonts();
         chip8.load_program().unwrap();
 
+        debug!("printing memory");
+        for (i, mem) in chip8.memory.iter().enumerate() {
+            debug!("{}: {:X}", i, mem);
+        }
+
         // TODO: Display
 
 
@@ -596,6 +601,7 @@ impl Chip8 {
     // jump and a call is that this instruction should first push the current PC
     // to the stack, so the subroutine can return later.
     fn subroutine(&mut self, opcode: u16) {
+        debug!("Subroutine with opcode {}", opcode);
         let address = opcode & 0x0FFF;
         self.stack.push(self.pc).unwrap();
         self.pc = address;

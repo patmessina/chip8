@@ -1,4 +1,5 @@
 // Print hello
+org 0
 
 
 main:
@@ -17,8 +18,8 @@ main:
   ld v3 0x0a
   ld v4 0x08
 
-  drw v3 v4 0x3
 
 loop:
+  # drw v3 v4 0x3
   wkp v5
   jmp loop
